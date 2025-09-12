@@ -1,0 +1,6 @@
+{
+  "raw_table": "data/raw/pet_table.csv",
+  "processed_table": "data/processed/pet_features.csv",
+  "artifacts_dir": "models",
+  "reports_dir": "reports"
+}

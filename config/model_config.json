@@ -1,0 +1,25 @@
+{
+  "response": "Mean_Accumbens_Area_Left_SUL_LOG",
+  "fixed_effects": [
+    "age",
+    "sex",
+    "scanner",
+    "dose",
+    "BMI"
+  ],
+  "random_effects": {
+    "grouping": "PatientID",
+    "terms": [
+      "1"
+    ]
+  },
+  "by_region": true,
+  "region_pattern": "^Mean_.*_SUL_LOG$",
+  "covariate_interactions": [
+    "age:sex"
+  ],
+  "categoricals": [
+    "sex",
+    "scanner"
+  ]
+}

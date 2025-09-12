@@ -1,0 +1,18 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# MATLAB
+*.asv
+*.m~
+*.mex*
+.matlab/*
+
+# Build / artifacts
+models/*
+!models/.gitkeep
+reports/latest/*
+!reports/latest/.gitkeep
+
+# VSCode
+.vscode/.history

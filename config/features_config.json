@@ -1,0 +1,20 @@
+{
+  "ensure": {
+    "SUL_LOG": true,
+    "asymmetry": true,
+    "global_ref_pc1z": true,
+    "metadata_clean": true
+  },
+  "id_columns": [
+    "PatientID",
+    "StudyInstanceUID",
+    "SeriesInstanceUID"
+  ],
+  "time_columns": [
+    "StudyDate"
+  ],
+  "drop_if_missing_any": [
+    "age",
+    "sex"
+  ]
+}

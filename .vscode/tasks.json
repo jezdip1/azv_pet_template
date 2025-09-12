@@ -1,0 +1,20 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "train-pipeline",
+      "type": "shell",
+      "command": "matlab -batch \"run('matlab/startup.m'); run('matlab/train_pipeline.m')\""
+    },
+    {
+      "label": "classify-one",
+      "type": "shell",
+      "command": "matlab -batch \"run('matlab/startup.m'); run('matlab/classify_new_patient.m')\""
+    },
+    {
+      "label": "run-tests",
+      "type": "shell",
+      "command": "matlab -batch \"addpath('matlab'); runtests('tests')\""
+    }
+  ]
+}
