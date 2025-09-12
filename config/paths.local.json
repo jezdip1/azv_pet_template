@@ -1,0 +1,6 @@
+{
+  "raw_table": "data/raw/pet_regions_with_mmi_JOINED_pje18082025.csv",
+  "processed_table": "data/processed/pet_features18082025.csv",
+  "artifacts_dir": "models",
+  "reports_dir": "reports"
+}
