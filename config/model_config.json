@@ -1,25 +1,52 @@
 {
-  "response": "Mean_Accumbens_Area_Left_SUL_LOG",
-  "fixed_effects": [
-    "age",
-    "sex",
-    "scanner",
-    "dose",
-    "BMI"
-  ],
-  "random_effects": {
-    "grouping": "PatientID",
-    "terms": [
-      "1"
-    ]
-  },
   "by_region": true,
-  "region_pattern": "^Mean_.*_SUL_LOG$",
-  "covariate_interactions": [
-    "age:sex"
+  "region_prefix": "Median",
+  "region_pattern": "^Median_.+_SUL_LOG$",
+  "response_pattern": "^Median_.+_SUL_LOG$",
+
+  "fixed_effects": [
+    "AgeR1",
+    "AgeR2",
+    "AgeR3",
+    "AgeR4",
+    "Sex",
+    "BMI",
+    "lTime",
+    "lDose",
+    "logVoxelVol",
+    "logAcqDur_s",
+    "HasTOF",
+    "HasPSF",
+    "Subsets",
+    "FilterFWHM_mm",
+    "MMI_to_MNIGMS",
+    "NCC_to_MNIGMS",
+    "GlobalRefPC1_z"
   ],
-  "categoricals": [
-    "sex",
-    "scanner"
-  ]
+  "fallback_age_terms": ["cAge", "cAge2", "cAge3"],
+  "covariate_interactions": ["Sex:cAge", "lDose:lTime"],
+
+  "random_effects": {
+    "grouping": "UNIS",
+    "terms": ["1"]
+  },
+  "categoricals": ["Sex"],
+
+  "age_splines": {
+    "enabled": true,
+    "prefix": "AgeR",
+    "knots_file": "./age_knots.mat",
+    "default_num_knots": 5
+  },
+
+  "global_ref": {
+    "refs": [
+      "Median_Cerebellum_Gray_Matter_Right",
+      "Median_Cerebellum_Gray_Matter_Left",
+      "Median_Brainstem_Right",
+      "Median_Brainstem_Left"
+    ],
+    "metric_suffix": "_SUL_LOG",
+    "params_dir": "./models/_globals"  
+  }
 }
