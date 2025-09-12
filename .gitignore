@@ -1,6 +1,8 @@
 # OS
 .DS_Store
 Thumbs.db
+# data
+*.csv
 
 # MATLAB
 *.asv
