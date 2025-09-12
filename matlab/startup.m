@@ -1,6 +1,7 @@
 function startup
-  root = fileparts(fileparts(mfilename('fullpath')));
-  addpath(fullfile(root,'matlab'));
-  addpath(genpath(fullfile(root,'matlab','+azvpet')));
-  fprintf('[startup] AZV-PET paths added.\n');
+  % Spouštěj z kořene repa: run('matlab/startup.m')
+  thisDir = fileparts(mfilename('fullpath'));   % .../AZV-PET/matlab
+  addpath(thisDir);
+  rehash path; rehash toolboxcache;
+  fprintf('[startup] AZV-PET: added %s\n', thisDir);
 end
