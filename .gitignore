@@ -16,3 +16,6 @@ reports/latest/*
 
 # VSCode
 .vscode/.history
+
+# data
+*.csv

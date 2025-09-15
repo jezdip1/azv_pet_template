@@ -40,7 +40,10 @@ end
 
 [M, info]    = azvpet.model.train_lmem(Tc, form, opts);
 
-cv = azvpet.model.loo_cv(Tc, form, opts);
+
+% cv = azvpet.model.loo_cv(Tc, form, opts);
+cv = azvpet.model.loo_cv_par(Tc, form, optsC);
+
 cal = azvpet.model.calibrate_model(Tc, M, info, cv);
 azvpet.model.report_model(Tc, M, info, cv, cal, paths);
 azvpet.io.save_artifacts(M, info, cal, paths, featCfg, mdlCfg);
