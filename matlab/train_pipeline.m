@@ -44,9 +44,16 @@ end
 % cv = azvpet.model.loo_cv(Tc, form, opts); %% pozor delal jsme jeste
 % zasahy do te paralelni verze, takze bude potreba overit ta neparalelni
 
+% cv = azvpet.model.loo_cv_par(Tc, form, optsC);
+% 
+% cal = azvpet.model.calibrate_from_cv(M, cv);
+% cal = azvpet.model.calibrate_model(Tc, M, info, cv);
 cv = azvpet.model.loo_cv_par(Tc, form, optsC);
 
-cal = azvpet.model.calibrate_from_cv(M, cv);
-% cal = azvpet.model.calibrate_model(Tc, M, info, cv);
+% 3) kalibrace z LOO
+cal = azvpet.model.calibrate_from_cv_full(M, cv);
+
+save('./models/_globals/trained_bundle.mat', 'M','info','cv','cal','nameMap','-v7.3');
+
 azvpet.model.report_model(Tc, M, info, cv, cal, paths);
 azvpet.io.save_artifacts(M, info, cal, paths, featCfg, mdlCfg);
