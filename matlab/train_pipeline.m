@@ -55,5 +55,18 @@ cal = azvpet.model.calibrate_from_cv_full(M, cv);
 
 save('./models/_globals/trained_bundle.mat', 'M','info','cv','cal','nameMap','-v7.3');
 
-azvpet.model.report_model(Tc, M, info, cv, cal, paths);
-azvpet.io.save_artifacts(M, info, cal, paths, featCfg, mdlCfg);
+% % prezentace v SUL (orig) – default
+% azvpet.model.report_model(Tc, M, info, cv, cal, paths);
+
+% prezentace v původních RAW intenzitách
+opts = struct('y_scale',"SUL",'sanitize',true);
+azvpet.model.report_model(Tc, M, info, cv, cal, paths, opts);
+
+% % diagnosticky čistě na link-škále
+% opts = struct('y_scale',"LINK",'sanitize',true);
+% azvpet.model.report_model(Tc, M, info, cv, cal, paths, opts);
+
+
+
+% azvpet.model.report_model(Tc, M, info, cv, cal, paths);
+% azvpet.io.save_artifacts(M, info, cal, paths, featCfg, mdlCfg);

@@ -11,8 +11,16 @@ function out = predict_new_exam(Tnew, resp, M, cal)
 %  Pred_orig, CI_orig (lo,hi), PI_orig (lo,hi),
 %  z, p_two_sided, is_outlier_95, is_outlier_99
 
-    if ~isKey(M, resp), error('predict_new_exam: model "%s" not found.', resp); end
-    L = M(resp);
+    % if ~isKey(M, resp), error('predict_new_exam: model "%s" not found.', resp); end
+    safe = azvpet.util.safe_resp_name(resp);
+    if isKey(M, resp)
+        L = M(resp);
+    elseif isKey(M, safe)
+        L = M(safe);
+    else
+        error('predict_new_exam: model "%s" not found.', resp);
+    end
+    % L = M(resp);
     C = cal.(resp);
 
     % population-level (bez RE) – link-škála
@@ -20,7 +28,7 @@ function out = predict_new_exam(Tnew, resp, M, cal)
     z975 = norminv(0.975);
     SEm  = (yCI_link(:,2)-yCI_link(:,1)) / (2*z975);
     s2res = L.MSE;
-    addVar = addedREvariance(L, Tnew);     % stejné jako výše
+    addVar = azvpet.util.addedREvariance(L, Tnew);     % stejné jako výše
     sd_pred_link = sqrt(max(0, SEm.^2 + s2res + addVar));
 
     % kalibrace link-škály (alpha + beta*y)
@@ -45,7 +53,13 @@ function out = predict_new_exam(Tnew, resp, M, cal)
     % z-score (link) – pokud máme pozorovanou hodnotu (např. pro audit)
     z = NaN; p = NaN; is95=false; is99=false;
     if ismember(resp, Tnew.Properties.VariableNames)
-        yobs_link = double(Tnew.(resp));
+        % yobs_link = double(Tnew.(resp));
+        yobs_link = NaN;
+        if ismember(resp, Tnew.Properties.VariableNames)
+            yobs_link = double(Tnew.(resp));
+        elseif ismember(safe, Tnew.Properties.VariableNames)
+            yobs_link = double(Tnew.(safe));
+        end
         if isfinite(yobs_link) && isfinite(sd_pred_link) && sd_pred_link>0
             z = (yobs_link - yhat_cal_link) ./ (C.c * sd_pred_link);
             p = 2*(1 - normcdf(abs(z)));
