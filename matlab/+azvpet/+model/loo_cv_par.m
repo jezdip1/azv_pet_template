@@ -73,7 +73,17 @@ function cv = loo_cv_par(T, formulaRHS, opts)
             tab  = emptyTab;
 
             if ismember(resp, Tloc.Properties.VariableNames)
-                frm = sprintf('%s ~ %s', resp, rhs);
+                resp_safe = azvpet.util.safe_resp_name(resp);
+                if ~strcmp(resp_safe, resp) && ~ismember(resp_safe, Ttr.Properties.VariableNames)
+                    if ismember(resp, Ttr.Properties.VariableNames)
+                        Ttr.(resp_safe) = Ttr.(resp);
+                        Tte.(resp_safe) = Tte.(resp);
+                    else
+                        warning('LOO: response %s not in table -> skip', resp); continue;
+                    end
+                end
+
+                frm = sprintf('%s ~ %s', resp_safe, rhs);
                 try
                     L = fitlme(Ttr, frm, 'FitMethod','REML');
 

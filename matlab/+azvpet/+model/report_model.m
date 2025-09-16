@@ -1,4 +1,4 @@
-function report_model(T, M, info, cv, cal, paths)
+function report_model(T, M, info, cv, cal, paths, opts)
 % REPORT pro všechny regiony v M (klíče mapy).
 % Ukládá PNG + JSON se souhrnem metrik.
 %
@@ -16,7 +16,9 @@ function report_model(T, M, info, cv, cal, paths)
 %  - ./reports/latest/<resp>_calibration.png
 %  - ./reports/latest/<resp>_zscore_vs_age.png
 %  - ./reports/latest/summary.json
-
+    if nargin < 7 || isempty(opts), opts = struct(); end
+    if ~isfield(opts,'y_scale'),   opts.y_scale = "SUL"; end   % "SUL" | "RAW" | "LINK"
+    if ~isfield(opts,'sanitize'),  opts.sanitize = true;  end
     out = fullfile(paths.reports_dir,'latest');
     if ~exist(out,'dir'), mkdir(out); end
 
@@ -71,8 +73,8 @@ function report_model(T, M, info, cv, cal, paths)
                 plot(C.Estimate, y, 'o','MarkerFaceColor',[0 0 0],'MarkerEdgeColor','k');
                 xline(0,'k:');
                 set(gca,'YTick',y,'YTickLabel',cellstr(strrep(C.Name,'_','-')),'YDir','reverse');
-                xlabel('Estimate (link)'); title([resp ' — Fixed effects (95% CI)']); grid on
-                saveas(f, fullfile(out,[resp '_fixed_forest.png'])); close(f);
+                set_xlabel(gca, 'Estimate (link)', opts.sanitize); set_title(gca, [nice_label(resp) ' — Fixed effects (95% CI)'], opts.sanitize);
+                close(f);
             end
         catch ME
             warning('Forest plot (%s): %s', resp, ME.message);
@@ -184,10 +186,53 @@ function report_model(T, M, info, cv, cal, paths)
                     % střed
                     plot(age, mu(:,s), 'LineWidth',2, 'Color', cols(s,:));
                 end
-                ylabel(strrep(regexprep(resp,'_LOG$',''), '_','-'));
-                xlabel('Age [y]'); grid on
-                if hasSex, legend(["PI","CI","Mean"] + " | Sex=" + sexCats, 'Location','best'); end
-                title([resp ' — Age effect (orig scale, CI & PI)']);
+                % výběr škály a převodu
+                scale = upper(string(opts.y_scale));   % "SUL" | "RAW" | "LINK"
+                ylab = y_label_for(resp, scale);
+                
+
+                if scale == "RAW"
+                    % odhadni mapování RAW ≈ a + b * SUL(orig)
+                    map = raw_from_sul_mapping(T, resp);
+                    if map.ok
+                        mu  = map.a + map.b * mu;
+                        loM = map.a + map.b * loM;   hiM = map.a + map.b * hiM;
+                        loP = map.a + map.b * loP;   hiP = map.a + map.b * hiP;
+                    else
+                        warning('RAW scale requested, but RAW mapping not available -> using SUL.');
+                        ylab = y_label_for(resp, "SUL");
+                    end
+                end
+
+                
+                % kreslení s čistými popisky
+                f = figure('Visible','off','Color','w'); hold on
+                cols = lines(nCurves);
+                for s=1:nCurves
+                    if all(isfinite(loP(:,s))) && all(isfinite(hiP(:,s)))
+                        fill([age; flipud(age)], [loP(:,s); flipud(hiP(:,s))], cols(s,:), ...
+                             'FaceAlpha',0.10,'EdgeColor','none');
+                    end
+                    if all(isfinite(loM(:,s))) && all(isfinite(hiM(:,s)))
+                        fill([age; flipud(age)], [loM(:,s); flipud(hiM(:,s))], cols(s,:), ...
+                             'FaceAlpha',0.20,'EdgeColor','none');
+                    end
+                    plot(age, mu(:,s), 'LineWidth',2, 'Color', cols(s,:));
+                end
+                set_ylabel(gca, ylab, opts.sanitize);
+                set_xlabel(gca, 'Age [y]', opts.sanitize); grid on
+                if hasSex
+                    leg = {};
+                    for s=1:nCurves
+                        leg = [leg, {sprintf('PI | Sex=%s', string(sexCats(s)))}, ...
+                                    {sprintf('CI | Sex=%s', string(sexCats(s)))}, ...
+                                    {sprintf('Mean | Sex=%s', string(sexCats(s)))}];
+                    end
+                    set_legend(gca, {leg}, opts.sanitize);
+                end
+                set_title(gca, sprintf('%s — Age effect (%s, CI & PI)', nice_label(regexprep(resp,'_LOG$','')), upper(string(ylab(end-3:end-1)))), opts.sanitize);
+                % saveas(f, fullfile(out,[resp '_age_effect.png'])); close(f);
+
                 saveas(f, fullfile(out,[resp '_age_effect.png'])); close(f);
             end
         catch ME
@@ -252,15 +297,91 @@ function report_model(T, M, info, cv, cal, paths)
                 f = figure('Visible','off','Color','w'); hold on
                 plot(A(v), z(v), '.', 'MarkerSize',10);
                 yline(0,'k:'); yline(2,'r--'); yline(3,'r-'); yline(-2,'r--'); yline(-3,'r-');
-                xlabel('Age [y]'); ylabel('z = (Obs - Pred) / (c * sd_{pred})');
-                title([resp ' — Standardized residuals']); grid on
+                xlabel('Age [y]'); set_ylabel(gca, 'z = (Obs - Pred) / (c * sd_pred)', opts.sanitize);
+                set_title(gca, [nice_label(resp) ' — Standardized residuals'], opts.sanitize); grid on
                 saveas(f, fullfile(out,[resp '_zscore_vs_age.png'])); close(f);
             end
         catch ME
             warning('Z-score plot (%s): %s', resp, ME.message);
         end
+            % === Partial residual plot (Age) ===
+        try
+            y_true = double(T.(resp));
+            y_fit  = fitted(mdl);  % celé predikce
+        
+            % najdi sloupce designMatrix odpovídající Age a Sex
+            coefNames = mdl.CoefficientNames;
+            keepIdx = contains(coefNames,'AgeR') | strcmp(coefNames,'Sex') | contains(coefNames,'Sex:Age');
+            X = mdl.designMatrix;  % n x p
+        
+            beta = mdl.Coefficients.Estimate;
+            y_age = X(:,keepIdx) * beta(keepIdx);
+        
+            % partial residuals
+            y_part = y_true - (y_fit - y_age);
+        
+            % převed na požadovanou škálu
+            if scale=="SUL"
+                y_part = exp(y_part) * cal.(resp).smear;
+            elseif scale=="RAW"
+                map = raw_from_sul_mapping(T, resp);
+                if map.ok
+                    y_part = map.a + map.b * (exp(y_part)*cal.(resp).smear);
+                end
+            end
+        
+            f = figure('Visible','off','Color','w');
+            hold on
+            scatter(T.Age, y_part, 20, 'o', 'MarkerEdgeAlpha',0.3);
+            plot(age, mu(:,1), 'r-', 'LineWidth',2); % model curve (už máš spočítanou výše)
+            set_xlabel(gca, 'Age [y]', opts.sanitize);
+            set_ylabel(gca, ylab, opts.sanitize);
+            set_title(gca, sprintf('%s — Partial residuals (Age)', nice_label(resp)), opts.sanitize);
+            saveas(f, fullfile(out,[resp '_partial_resid.png']));
+            close(f);
+        catch ME
+            warning('Partial residual plot failed for %s: %s', resp, ME.message);
+        end
+        % === Predicted vs Observed (LOO) ===
+        try
+            cvt = cv.(resp);
+            y_true = double(cvt.y_true);
+            y_pred = double(cvt.y_pred);
+        
+            % převeď na požadovanou škálu
+            if scale=="SUL"
+                y_true = exp(y_true) * cal.(resp).smear;
+                y_pred = exp(y_pred) * cal.(resp).smear;
+            elseif scale=="RAW"
+                map = raw_from_sul_mapping(T, resp);
+                if map.ok
+                    y_true = map.a + map.b * (exp(y_true)*cal.(resp).smear);
+                    y_pred = map.a + map.b * (exp(y_pred)*cal.(resp).smear);
+                end
+            end
+        
+            % metriky
+            R = corr(y_true, y_pred, 'rows','complete');
+            R2 = R^2;
+            MAE = mean(abs(y_true - y_pred),'omitnan');
+            RMSE = sqrt(mean((y_true - y_pred).^2,'omitnan'));
+        
+            f = figure('Visible','off','Color','w'); hold on
+            scatter(y_true, y_pred, 20, 'filled', 'MarkerFaceAlpha',0.3);
+            lims = [min([y_true;y_pred]), max([y_true;y_pred])];
+            plot(lims, lims, 'k--','LineWidth',1.5); % diagonála
+        
+            set_xlabel(gca, 'Observed', opts.sanitize);
+            set_ylabel(gca, 'Predicted (LOO)', opts.sanitize);
+            set_title(gca, sprintf('%s — Pred vs Obs (LOO)\nR²=%.3f, MAE=%.3f, RMSE=%.3f',...
+                nice_label(resp), R2, MAE, RMSE), opts.sanitize);
+            axis equal; xlim(lims); ylim(lims);
+            saveas(f, fullfile(out,[resp '_pred_vs_obs.png']));
+            close(f);
+        catch ME
+            warning('Pred vs Obs plot failed for %s: %s', resp, ME.message);
+        end
     end
-
     % ---------- 5) summary.json ----------
     try
         fid = fopen(fullfile(out,'summary.json'),'w');
@@ -353,5 +474,147 @@ function addVar = addedREvariance(L, TT)
             addVar = addVar + s2g .* double(isNew);
         end
     catch
+    end
+end
+
+function s = nice_label(varname)
+    % uživatelský titulek (bez _ a ^ jako indexů)
+    s = strrep(varname, '_', '-');
+    s = strrep(s, '^', ' ');
+end
+
+function set_title(h, txt, sanitize)
+    if sanitize
+        title(h, txt, 'Interpreter','none');
+    else
+        title(h, txt);
+    end
+end
+function set_xlabel(h, txt, sanitize)
+    if sanitize
+        xlabel(h, txt, 'Interpreter','none');
+    else
+        xlabel(h, txt);
+    end
+end
+function set_ylabel(h, txt, sanitize)
+    if sanitize
+        ylabel(h, txt, 'Interpreter','none');
+    else
+        ylabel(h, txt);
+    end
+end
+function set_legend(h, args, sanitize)
+    if sanitize
+        legend(h, args{:}, 'Interpreter','none', 'Location','best');
+    else
+        legend(h, args{:}, 'Location','best');
+    end
+end
+
+function ylab = y_label_for(resp, scale)
+    base = regexprep(resp,'_SUL_LOG$','');      % bez suffixu
+    switch upper(string(scale))
+        case "SUL"
+            ylab = [nice_label(base) ' (SUL)'];
+        case "RAW"
+            ylab = [nice_label(base) ' (RAW)'];
+        case "LINK"
+            ylab = [nice_label(resp) ' (link/log)'];
+        otherwise
+            ylab = nice_label(base);
+    end
+end
+
+function f = raw_multiplier_from_T(Tin, resp)
+% Vrátí mediánový násobek RAW/SUL pro daný resp (…_SUL_LOG).
+% Když chybí _SUL, pokusí se ho spočítat přes ensureSUL_LOG.
+    T = Tin;   % lokální kopie (nechceme měnit volající tabulku)
+    base  = regexprep(resp,'_SUL_LOG$','');
+    sulVar = [base '_SUL'];
+    rawVar = base;
+
+    % 1) Musíme mít raw intenzitu (BASE); bez ní RAW prezentace nejde
+    if ~ismember(rawVar, T.Properties.VariableNames)
+        f = NaN; return;
+    end
+
+    % 2) Když chybí _SUL, zkus ho vytvořit
+    if ~ismember(sulVar, T.Properties.VariableNames)
+        try
+            % ensureSUL_LOG přidá BASE_SUL a BASE_SUL_LOG, je NaN-tolerantní
+            [T, ~] = azvpet.features.ensureSUL_LOG(T, base);
+        catch
+            % necháme f = NaN níže
+        end
+    end
+
+    % 3) Pokud už _SUL existuje, spočítej robustní poměr
+    if ismember(sulVar, T.Properties.VariableNames)
+        num = double(T.(rawVar));
+        den = double(T.(sulVar));
+        msk = isfinite(num) & isfinite(den) & den > 0;
+        if nnz(msk) >= 10
+            r = num(msk) ./ den(msk);
+            f = median(r, 'omitnan');
+            if ~isfinite(f) || f<=0, f = NaN; end
+        else
+            f = NaN;
+        end
+    else
+        f = NaN;
+    end
+end
+function map = raw_from_sul_mapping(Tin, resp)
+% Vrátí mapování RAW ≈ a + b * SUL(orig) pro daný resp (..._SUL_LOG).
+% Pokud chybí *_SUL, pokusí se ho vytvořit přes ensureSUL_LOG.
+% Výstup: struct('a',a,'b',b,'ok',logical)
+
+    T = Tin;  map = struct('a',NaN,'b',NaN,'ok',false);
+
+    base   = regexprep(resp,'_SUL_LOG$','');
+    sulVar = [base '_SUL'];
+    rawVar = base;
+
+    if ~ismember(rawVar, T.Properties.VariableNames)
+        return; % RAW není k dispozici -> nelze mapovat
+    end
+    if ~ismember(sulVar, T.Properties.VariableNames)
+        try
+            [T, ~] = azvpet.features.ensureSUL_LOG(T, base); % dopočti SUL
+        catch
+            return;
+        end
+    end
+
+    % SUL(orig) = exp(SUL_LOG) * smear  — smear si vezmeme z 'cal' při volání
+    % Tady stačí „pro data“ použít log→exp bez smear (faktor se chytne do a,b)
+    if ismember([sulVar '_LOG'], T.Properties.VariableNames)
+        sul_orig = exp(double(T.([sulVar '_LOG']))); % smear se absorbne do a,b
+    else
+        sul_orig = double(T.(sulVar));
+    end
+
+    raw = double(T.(rawVar));
+    msk = isfinite(raw) & isfinite(sul_orig);
+    if nnz(msk) < 20, return; end
+
+    try
+        lm = fitlm(sul_orig(msk), raw(msk));    % raw ~ a + b*sul
+        a = lm.Coefficients.Estimate(1);
+        b = lm.Coefficients.Estimate(2);
+        if isfinite(a) && isfinite(b)
+            map.a = a; map.b = b; map.ok = true;
+        end
+    catch
+        % fallback: robustfit (Statistics TB)
+        try
+            b_ab = robustfit(sul_orig(msk), raw(msk));
+            a = b_ab(1); b = b_ab(2);
+            if isfinite(a) && isfinite(b)
+                map.a = a; map.b = b; map.ok = true;
+            end
+        catch
+        end
     end
 end
