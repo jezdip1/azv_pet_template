@@ -69,50 +69,46 @@ function cv = loo_cv_par(T, formulaRHS, opts)
         localParts = cell(1, nResp);
 
         for ri = 1:nResp
-            resp = responses{ri};
-            tab  = emptyTab;
-
-            if ismember(resp, Tloc.Properties.VariableNames)
-                resp_safe = azvpet.util.safe_resp_name(resp);
-                if ~strcmp(resp_safe, resp) && ~ismember(resp_safe, Ttr.Properties.VariableNames)
-                    if ismember(resp, Ttr.Properties.VariableNames)
-                        Ttr.(resp_safe) = Ttr.(resp);
-                        Tte.(resp_safe) = Tte.(resp);
-                    else
-                        warning('LOO: response %s not in table -> skip', resp); continue;
-                    end
-                end
-
-                frm = sprintf('%s ~ %s', resp_safe, rhs);
-                try
-                    L = fitlme(Ttr, frm, 'FitMethod','REML');
-
-                    % CI_mean (link): použij predict s CI
-                    [y_pred, yCI] = predict(L, Tte, 'Conditional', false, 'Alpha', 0.05);
-                    z975 = norminv(0.975);
-                    SEm  = (yCI(:,2) - yCI(:,1)) / (2*z975);
-
-                    % predikční SD (link) pro PI: SEm^2 + MSE + added RE variance (nové skupiny)
-                    s2res = L.MSE;
-                    addVar = addedREvariance(L, Tte);   % helper níž
-                    sd_pred_link = sqrt(max(0, SEm.^2 + s2res + addVar));
-
-                    y_true = double(Tte.(resp));
-                    resid  = y_true - y_pred;
-
-                    Age = nan(height(Tte),1);
-                    if ismember('Age', Tte.Properties.VariableNames)
-                        Age = double(Tte.Age);
-                    end
-
-                    tab = table(repmat(pids(gi), height(Tte),1), Age, y_true, y_pred, ...
-                                yCI(:,1), yCI(:,2), sd_pred_link, resid, ...
-                                'VariableNames', cellstr(varNames));
-                catch
-                    % nech prázdný fold (rychleji se skládá než NaNy)
-                    tab = emptyTab;
-                end
+            resp = string(responses{ri});
+            col  = azvpet.util.resolve_resp_column(resp, Ttr, opts);
+            
+            if ~ismember(col, string(Ttr.Properties.VariableNames))
+                warning('LOO: response %s not in table -> skip', char(resp));
+                localParts{ri} = emptyTab;
+                continue
             end
+            
+            frm = sprintf('%s ~ %s', char(col), rhs);
+            try
+                L = fitlme(Ttr, frm, 'FitMethod','REML');
+                [y_pred, yCI] = predict(L, Tte, 'Conditional', false, 'Alpha', 0.05);
+                z975 = norminv(0.975);
+                SEm  = (yCI(:,2) - yCI(:,1)) / (2*z975);
+                s2res = L.MSE;
+                addVar = addedREvariance(L, Tte);
+                sd_pred_link = sqrt(max(0, SEm.^2 + s2res + addVar));
+            
+                % y_true – preferuj originál, jinak mapped 'col'
+                if ismember(resp, string(Tte.Properties.VariableNames))
+                    y_true = double(Tte.(char(resp)));
+                else
+                    y_true = double(Tte.(char(col)));
+                end
+                resid = y_true - y_pred;
+            
+                Age = nan(height(Tte),1);
+                if ismember('Age', string(Tte.Properties.VariableNames))
+                    Age = double(Tte.Age);
+                end
+            
+                tab = table(repmat(pids(gi), height(Tte),1), Age, y_true, y_pred, ...
+                            yCI(:,1), yCI(:,2), sd_pred_link, resid, ...
+                            'VariableNames', cellstr(varNames));
+            catch ME
+                warning('LOO %s fold %d failed: %s', char(resp), gi, ME.message);
+                tab = emptyTab;
+            end
+
 
             localParts{ri} = tab;
         end

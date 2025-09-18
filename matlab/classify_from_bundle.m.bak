@@ -1,0 +1,178 @@
+function S = classify_from_bundle(new_csv, out_root)
+% Klasifikace nových vyšetření stejnou pipeline jako při tréninku.
+%  - načte bundle (M, info, cal, nameMap)
+%  - načte TRÉNOVACÍ tabulku jako referenci pro kategorie
+%  - připraví nová data (kovariáty, *_SUL_LOG, sanitizace názvů)
+%  - zarovná kategorie na trénink (vč. UNIS)
+%  - vyrobí reporty (MODEL i DATA boxplot varianta, pokud máme trénink)
+%
+% Použití:
+%   S = classify_from_bundle('data/to_test/test_pet_regions_with_mmi_JOINED_08092025.csv', ...
+%                            'reports/new_patients');
+
+  azvpet.util.check_requirements();
+  paths = jsondecode(fileread('./config/paths.local.json'));
+  cfg   = jsondecode(fileread('./config/model_config.json'));
+
+  bundle = './models/_globals/trained_bundle.mat';
+  if ~isfile(bundle)
+    error('Nenalezen %s – nejdřív spusť train_pipeline.', bundle);
+  end
+  B = load(bundle, 'M','info','cal','nameMap');
+  M = B.M; info = B.info; cal = B.cal; nameMap = B.nameMap;
+
+  % ---------- načti trénink jako referenci pro kategorie (bez retréninku) ----------
+  train_csv = paths.raw_table;
+  Ttr0 = azvpet.io.load_table(train_csv);
+  covOpts = struct('lbmVersion','James', 'ageKnotsFile',cfg.age_splines.knots_file, ...
+                   'refs',string(cfg.global_ref.refs), 'doseVar','InjectedDose_MBq', ...
+                   'doseMultiplier',1);
+  [Ttr0, ~] = azvpet.features.ensure_model_covariates(Ttr0, covOpts);
+
+  % resp = string(info.responses(:));
+  % bases = regexprep(resp, '^(.+)_SUL_LOG$','$1');
+  doseOpts = struct('doseVar','InjectedDose_MBq','multiplier',1,'lbmVersion','James');
+  % [Ttr0, ~] = azvpet.features.ensureSUL_LOG(Ttr0, bases, doseOpts);
+  
+    resp = string(info.responses(:));                  % CLEAN, např. ...I_V_Right_SUL_LOG
+    bases_clean = regexprep(resp,'_SUL_LOG$','');      % CLEAN base jména
+    
+    % mapuj CLEAN -> ORIG přes nameMap z bundle
+    nm = B.nameMap;                                    % tabulka se sloupci nm.orig, nm.clean
+    [tf,loc] = ismember(bases_clean, string(nm.clean));
+    bases_src = bases_clean;
+    bases_src(tf) = string(nm.orig(loc(tf)));          % ORIG jména (s I-V atd.)
+    
+    % a teprve teď dopočítej *_SUL_LOG v SYROVÉ tabulce
+    [Ttr0, ~] = azvpet.features.ensureSUL_LOG(Ttr0, cellstr(bases_src), doseOpts);
+
+
+  if isfield(cfg,'global_ref') && isfield(cfg.global_ref,'metric_suffix') ...
+      && strcmpi(cfg.global_ref.metric_suffix,'_SUL_LOG')
+    for r = string(cfg.global_ref.refs).'
+      [Ttr0, ~] = azvpet.features.ensureSUL_LOG(Ttr0, char(r), doseOpts);
+    end
+  end
+  % stejné „valid names“ jako při tréninku
+  [Ttrain, ~, optsTrain] = azvpet.util.ensure_valid_varnames(Ttr0, struct('grouping','UNIS'));
+  % (optsTrain tu používáme jen kvůli názvu grouping proměnné)
+
+  % ---------- načti nová data a připrav je úplně stejně ----------
+  Tnew0 = readtable(new_csv, 'VariableNamingRule','preserve');
+  [Tnew0, ~] = azvpet.features.ensure_model_covariates(Tnew0, covOpts);
+  % [Tnew0, ~] = azvpet.features.ensureSUL_LOG(Tnew0, bases, doseOpts);
+   
+    resp = string(info.responses(:));                  % CLEAN, např. ...I_V_Right_SUL_LOG
+    bases_clean = regexprep(resp,'_SUL_LOG$','');      % CLEAN base jména
+    
+    % mapuj CLEAN -> ORIG přes nameMap z bundle
+    nm = B.nameMap;                                    % tabulka se sloupci nm.orig, nm.clean
+    [tf,loc] = ismember(bases_clean, string(nm.clean));
+    bases_src = bases_clean;
+    bases_src(tf) = string(nm.orig(loc(tf)));          % ORIG jména (s I-V atd.)
+    
+    % a teprve teď dopočítej *_SUL_LOG v SYROVÉ tabulce
+    [Tnew0, ~] = azvpet.features.ensureSUL_LOG(Tnew0, cellstr(bases_src), doseOpts);
+
+
+
+
+  if isfield(cfg,'global_ref') && isfield(cfg.global_ref,'metric_suffix') ...
+      && strcmpi(cfg.global_ref.metric_suffix,'_SUL_LOG')
+    for r = string(cfg.global_ref.refs).'
+      [Tnew0, ~] = azvpet.features.ensureSUL_LOG(Tnew0, char(r), doseOpts);
+    end
+  end
+
+  % stejné čištění názvů (ale zároveň přemapujeme responses & grouping)
+  optsC = struct('grouping','UNIS','response_list', {cellstr(resp)});
+  [Tnew, ~, optsC] = azvpet.util.ensure_valid_varnames(Tnew0, optsC);
+  % DŮLEŽITÉ: zarovnej kategorie dle Ttrain (včetně nových UNIS)
+  Tnew = align_categories_to_training(Tnew, Ttrain);
+
+  % ---------- diagnostika: zkontroluj chybějící/NaN prediktory pro 1. model ----------
+  anyKey = info.responses(1);
+  if isKey(M, char(anyKey))
+    L = M(char(anyKey));
+    [miss, nanvars, badcats] = check_row_against_model(Tnew(1,:), Ttrain, L);
+    if ~isempty(miss) || ~isempty(nanvars) || ~isempty(badcats)
+      fprintf('[DIAG] Missing: %s\n', strjoin(miss, ', '));
+      fprintf('[DIAG] NaN vars: %s\n', strjoin(nanvars, ', '));
+      fprintf('[DIAG] Bad categories: %s\n', strjoin(badcats, ', '));
+    end
+  end
+
+  % ---------- smyčka přes nové řádky, report ----------
+  if ~exist(out_root,'dir'), mkdir(out_root); end
+  S = struct('cases',[]);
+  n = height(Tnew);
+  for i = 1:n
+    row = Tnew(i,:);
+
+    sid = '';
+    if ismember(optsTrain.grouping, row.Properties.VariableNames)
+      sid = char(string(row.(optsTrain.grouping)));
+    end
+    if isempty(sid) || strcmpi(sid,'<undefined>'), sid = sprintf('row_%04d',i); end
+    outdir = fullfile(out_root, safe_fname(sid)); if ~exist(outdir,'dir'), mkdir(outdir); end
+
+    % report – obě varianty boxplotů (DATA i MODEL)
+    Scase = report_new_patient_all_regions(Ttrain, row, info, M, cal, outdir);
+    S.cases = [S.cases; struct('id',sid,'summary',Scase.summary_table, ...
+                'csv',Scase.csv,'json',Scase.json,'zplot',Scase.z_plot)];
+  end
+  fprintf('[OK] Classified %d new rows -> %s\n', n, out_root);
+end
+
+% ---------- pomocné funkce ----------
+
+function T = align_categories_to_training(T, Ttrain)
+  vnames = string(T.Properties.VariableNames);
+  for k = 1:numel(vnames)
+    vn = vnames(k);
+    if ismember(vn, string(Ttrain.Properties.VariableNames))
+      if iscategorical(Ttrain.(vn))
+        trainCats = categories(Ttrain.(vn));
+        % sjednoť kategorie; povol nové úrovně jako <undefined>
+        T.(vn) = categorical(string(T.(vn)), trainCats);
+        % speciálně UNIS dovol i nové úrovně (přidej do union)
+        if strcmpi(vn,'UNIS')
+          allCats = union(trainCats, categories(categorical(string(T.(vn)))));
+          T.(vn) = categorical(string(T.(vn)), allCats);
+        end
+      end
+    end
+  end
+end
+
+function [missing, nanvars, badcats] = check_row_against_model(row, Ttrain, L)
+% Vrátí seznamy problémů pro 1 řádek a 1 model (rychlá diagnostika).
+  missing = {};
+  nanvars = {};
+  badcats = {};
+
+  P = string(L.PredictorNames);
+  for p = P(:).'
+    if ~ismember(p, string(row.Properties.VariableNames))
+      missing{end+1} = char(p); %#ok<AGROW>
+      continue
+    end
+    x = row.(char(p));
+    if ismissing(x) || (isnumeric(x) && ~isfinite(x))
+      nanvars{end+1} = char(p); %#ok<AGROW>
+    end
+    if iscategorical(x)
+      catsRow = categories(x);
+      if ismember(p, string(Ttrain.Properties.VariableNames)) && iscategorical(Ttrain.(char(p)))
+        catsTrain = categories(Ttrain.(char(p)));
+        if any(~ismember(catsRow, catsTrain))
+          badcats{end+1} = char(p); %#ok<AGROW>
+        end
+      end
+    end
+  end
+end
+
+function s = safe_fname(txt)
+  s = regexprep(char(string(txt)),'[^A-Za-z0-9\-]+','_');
+end
