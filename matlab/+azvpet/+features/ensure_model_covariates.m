@@ -18,7 +18,8 @@ function [T, meta] = ensure_model_covariates(T, opts)
   if ~isfield(opts,'refs'),          opts.refs = strings(0,1);  end   % regiony pro GlobalRefPC1_z
   if ~isfield(opts,'doseVar'),       opts.doseVar = '';         end
   if ~isfield(opts,'doseMultiplier'),opts.doseMultiplier = [];  end   % Bq->MBq = 1e-6 default
-  
+    if ~isfield(opts,'muAge'),        opts.muAge = []; end
+    if ~isfield(opts,'AgeR_knots'),   opts.AgeR_knots = []; end  
   vn0 = string(T.Properties.VariableNames);
   meta = struct();
   
@@ -42,34 +43,122 @@ function [T, meta] = ensure_model_covariates(T, opts)
       T.Sex = categorical(repmat(missing,height(T),1),["M","F"]);
   end
   
-  %% 1) Věk + spliny i polynomy
-  % Age v letech (datetime → double), fallback NaN
-  if ismember('Study Date',vn0) && ismember('PatientBirthDate',vn0)
-      T.Age = years(T.("Study Date") - T.PatientBirthDate);
-  elseif ~ismember('Age',vn0)
-      T.Age = nan(height(T),1);
-  end
-  T.Age = double(T.Age);
-  muAge = mean(T.Age,'omitnan');
-  T.cAge  = T.Age - muAge;
-  T.cAge2 = T.cAge.^2;
-  T.cAge3 = T.cAge.^3;
-  
-  % Age RCS (fixní uzly – když jsou k dispozici)
-  if ~isempty(opts.ageKnotsFile) && isfile(opts.ageKnotsFile)
-      S = load(opts.ageKnotsFile);   % očekává proměnnou 'knots'
-      if isfield(S,'knots') && numel(S.knots)>=4
-          [T, rcsi] = addAgeRCS_local(T,'Age','AgeR',numel(S.knots),S.knots);
-          meta.AgeR_knots = rcsi.knots;
+  % %% 1) Věk + spliny i polynomy
+  % % Age v letech (datetime → double), fallback NaN
+  % if ismember('Study Date',vn0) && ismember('PatientBirthDate',vn0)
+  %     T.Age = years(T.("Study Date") - T.PatientBirthDate);
+  % elseif ~ismember('Age',vn0)
+  %     T.Age = nan(height(T),1);
+  % end
+  % T.Age = double(T.Age);
+  % muAge = mean(T.Age,'omitnan');
+  % T.cAge  = T.Age - muAge;
+  % T.cAge2 = T.cAge.^2;
+  % T.cAge3 = T.cAge.^3;
+  % 
+  % % Age RCS (fixní uzly – když jsou k dispozici)
+  % if ~isempty(opts.ageKnotsFile) && isfile(opts.ageKnotsFile)
+  %     S = load(opts.ageKnotsFile);   % očekává proměnnou 'knots'
+  %     if isfield(S,'knots') && numel(S.knots)>=4
+  %         [T, rcsi] = addAgeRCS_local(T,'Age','AgeR',numel(S.knots),S.knots);
+  %         meta.AgeR_knots = rcsi.knots;
+  %     else
+  %         [T, rcsi] = addAgeRCS_local(T,'Age','AgeR',5,[]);
+  %         meta.AgeR_knots = rcsi.knots;
+  %     end
+  % else
+  %     [T, rcsi] = addAgeRCS_local(T,'Age','AgeR',5,[]);
+  %     meta.AgeR_knots = rcsi.knots;
+  % end
+%% 1) Věk + spliny i polynomy
+  % Najdi sloupce s datem vyšetření a narození včetně aliasů
+  vn = string(T.Properties.VariableNames);
+
+  studyAliases = ["Study Date","StudyDate","Study_Date","StudyDateTime","SeriesDate","Series_Date"];
+  birthAliases = ["PatientBirthDate","Patient_Birth_Date","PatientBirthDateTime","BirthDate","Birth_Date"];
+
+  hasAge = ismember("Age", vn);
+  studyCol = studyAliases(ismember(studyAliases, vn));
+  birthCol = birthAliases(ismember(birthAliases, vn));
+
+  % Pokud Age chybí NEBO je celý NaN, zkus ho spočítat
+  needComputeAge = ~hasAge || all(~isfinite(double(T.("Age"))));
+
+  if needComputeAge && ~isempty(studyCol) && ~isempty(birthCol)
+      scol = studyCol(1); bcol = birthCol(1);
+      % převod na datetime (zkus text/číslo)
+      Sdt = toDatetimeFlexible(T.(scol));
+      Bdt = toDatetimeFlexible(T.(bcol));
+      AgeY = years(Sdt - Bdt);
+      T.Age = double(AgeY);
+  elseif ~hasAge
+      % fallback: někdy už existuje „AgeYears" nebo podobné
+      cand = ["AgeYears","Age_Years","AgeY"];
+      hit = cand(ismember(cand, vn));
+      if ~isempty(hit)
+          T.Age = double(T.(hit(1)));
       else
-          [T, rcsi] = addAgeRCS_local(T,'Age','AgeR',5,[]);
-          meta.AgeR_knots = rcsi.knots;
+          T.Age = nan(height(T),1);
       end
   else
-      [T, rcsi] = addAgeRCS_local(T,'Age','AgeR',5,[]);
-      meta.AgeR_knots = rcsi.knots;
+      % Age existuje – jen se ujisti, že je double
+      T.Age = double(T.Age);
   end
-  
+
+  % if isfield(opts,'muAge') && isfinite(opts.muAge)
+  %   muAge = opts.muAge;          % použij tréninkový průměr
+  %   else
+  %       muAge = mean(T.Age,'omitnan'); % fallback, když se netrénuje
+  %   end
+  %   T.cAge  = T.Age - muAge;
+  %   T.cAge2 = T.cAge.^2;
+  %   T.cAge3 = T.cAge.^3;
+  %   meta.muAge = muAge;
+  %     % Age RCS (fixní uzly – když jsou k dispozici)
+  %     if ~isempty(opts.ageKnotsFile) && isfile(opts.ageKnotsFile)
+  %         S = load(opts.ageKnotsFile);   % očekává proměnnou 'knots'
+  %         if isfield(S,'knots') && numel(S.knots)>=4
+  %             [T, rcsi] = addAgeRCS_local(T,'Age','AgeR',numel(S.knots),S.knots);
+  %             meta.AgeR_knots = rcsi.knots;
+  %         else
+  %             [T, rcsi] = addAgeRCS_local(T,'Age','AgeR',5,[]);
+  %             meta.AgeR_knots = rcsi.knots;
+  %         end
+  %     else
+  %         [T, rcsi] = addAgeRCS_local(T,'Age','AgeR',5,[]);
+  %         meta.AgeR_knots = rcsi.knots;
+  %     end
+  % použij tréninkový průměr, pokud je k dispozici
+    if ~isempty(opts.muAge) && isfinite(opts.muAge)
+        muAge = opts.muAge;
+    else
+        muAge = mean(T.Age,'omitnan');   % fallback (při tréninku)
+    end
+    T.cAge  = T.Age - muAge;
+    T.cAge2 = T.cAge.^2;
+    T.cAge3 = T.cAge.^3;
+    meta.muAge = muAge;
+    
+    % --- Age spliny (RCS) – preferuj předané uzly ---
+    if ~isempty(opts.AgeR_knots)
+        knots = sanitize_knots_local(opts.AgeR_knots);
+        [T, rcsi] = addAgeRCS_local(T,'Age','AgeR',numel(knots),knots);
+        meta.AgeR_knots = rcsi.knots;
+    elseif ~isempty(opts.ageKnotsFile) && isfile(opts.ageKnotsFile)
+        S = load(opts.ageKnotsFile);
+        if isfield(S,'knots') && numel(S.knots)>=4
+            knots = sanitize_knots_local(S.knots);
+            [T, rcsi] = addAgeRCS_local(T,'Age','AgeR',numel(knots),knots);
+            meta.AgeR_knots = rcsi.knots;
+        else
+            [T, rcsi] = addAgeRCS_local(T,'Age','AgeR',5,[]);
+            meta.AgeR_knots = rcsi.knots;
+        end
+    else
+        % jen při tréninku; pro single-row inference je to nevhodné
+        [T, rcsi] = addAgeRCS_local(T,'Age','AgeR',5,[]);
+        meta.AgeR_knots = rcsi.knots;
+    end
   %% 2) BMI (kg/m^2)
   if ismember('PatientWeight_kg', string(T.Properties.VariableNames)) && ...
      ismember('PatientSize_m',    string(T.Properties.VariableNames))
@@ -140,59 +229,42 @@ function [T, meta] = ensure_model_covariates(T, opts)
       end
   end
   
-  %% 9) GlobalRefPC1_z
-  % Preferuj existující implementaci:
-  try
-      % if ~ismember('GlobalRefPC1_z', string(T.Properties.VariableNames))
-      %     [T, ~] = azvpet.features.ensure_GlobalRefPC1_z(T, './models/_globals'); % přizpůsob cestu dle projektu
-      % end
-      if ~ismember('GlobalRefPC1_z', string(T.Properties.VariableNames))
-        % použij configem daný adresář (pokud existuje)
+
+%% 9) GlobalRefPC1_z
+try
+    % 9a) Nejdřív zajisti *_SUL_LOG pro referenční regiony
+    refs = string(opts.refs(:));
+    refs = refs(refs~="");
+    if ~isempty(refs)
+        doseOpts = struct('doseVar',opts.doseVar, ...
+                          'multiplier',opts.doseMultiplier, ...
+                          'lbmVersion',opts.lbmVersion);
+        for r = refs.'
+            % r je base name (např. "Mean_Cerebellum_Gray_Matter_Right")
+            % ensureSUL_LOG vytvoří r+"_SUL_LOG", pokud zdrojové sloupce existují
+            [T, ~] = azvpet.features.ensureSUL_LOG(T, char(r), doseOpts);
+        end
+    end
+
+    % 9b) Spočítej GlobalRefPC1_z pomocí uloženého projektoru (bez refitování)
+    if ~ismember('GlobalRefPC1_z', string(T.Properties.VariableNames))
         pdir = './models/_globals';
-        if isfield(opts,'paramsDir') && ~isempty(opts.paramsDir)
+        % sjednoť název volby: preferuj opts.params_dir, ale toleruj i opts.paramsDir
+        if isfield(opts,'params_dir') && ~isempty(opts.params_dir)
+            pdir = opts.params_dir;
+        elseif isfield(opts,'paramsDir') && ~isempty(opts.paramsDir)
             pdir = opts.paramsDir;
         end
         [T, ~] = azvpet.features.ensure_GlobalRefPC1_z(T, pdir);
-      end
-  catch
-      % Fallback: z daných referenčních regionů (SUL_LOG), pokud jsou; jinak NaN
-      refs = string(opts.refs(:));
-      refs = refs(refs~="");
-      if ~isempty(refs)
-          % zajisti SUL_LOG pro refy
-          for r = refs.'
-              [T, ~] = azvpet.features.ensureSUL_LOG(T, char(r), struct('doseVar',opts.doseVar,'multiplier',opts.doseMultiplier,'lbmVersion',opts.lbmVersion));
-          end
-          refLog = refs + "_SUL_LOG";
-          refLog = refLog(ismember(refLog, string(T.Properties.VariableNames)));
-          if numel(refLog) >= 2
-              X = [];
-              for c = refLog(:).'
-                  x = double(T.(char(c))); x(~isfinite(x)) = NaN;
-                  mu = mean(x,'omitnan'); sd = std(x,'omitnan');
-                  if isfinite(sd) && sd>0, X = [X, (x-mu)./sd]; end %#ok<AGROW>
-              end
-              T.GlobalRefPC1_z = nan(height(T),1);
-              if size(X,2) >= 2
-                  ok = all(isfinite(X),2);
-                  if nnz(ok) >= 20
-                      [~,score] = pca(X(ok,:), 'Centered', false, 'NumComponents',1);
-                      pc1 = nan(height(T),1); pc1(ok) = score(:,1);
-                      muPC = mean(pc1(ok),'omitnan'); sdPC = std(pc1(ok),0,'omitnan');
-                      T.GlobalRefPC1_z = (pc1 - muPC)./sdPC;
-                  end
-              end
-          else
-              if ~ismember('GlobalRefPC1_z', string(T.Properties.VariableNames))
-                  T.GlobalRefPC1_z = nan(height(T),1);
-              end
-          end
-      else
-          if ~ismember('GlobalRefPC1_z', string(T.Properties.VariableNames))
-              T.GlobalRefPC1_z = nan(height(T),1);
-          end
-      end
-  end
+    end
+catch ME
+    % fallback – nic nerefituj, raději nech NaN (a dej vědět)
+    warning('ensure_model_covariates: GlobalRefPC1_z fallback (%s)', ME.message);
+    if ~ismember('GlobalRefPC1_z', string(T.Properties.VariableNames))
+        T.GlobalRefPC1_z = nan(height(T),1);
+    end
+end
+
   
   %% 10) UNIS (random effect ID) – aliasing a typ
   if ismember('UNIS', string(T.Properties.VariableNames))
@@ -298,3 +370,58 @@ function [T, meta] = ensure_model_covariates(T, opts)
       if all(isnan(z)), z = zeros(height(T),1); end  % default 0 (bez TOF/PSF)
   end
   
+ % --- local helper uvnitř souboru ---
+  function dt = toDatetimeFlexible(x)
+      % Přijme string/char/numeric/datetime a vrátí datetime (NaT, když to nejde)
+      if isdatetime(x)
+          dt = x;
+          return
+      end
+      if iscellstr(x) || isstring(x)
+          try
+              dt = datetime(x, 'InputFormat','yyyy-MM-dd''T''HH:mm:ss', 'TimeZone','local');
+          catch
+              try
+                  dt = datetime(x, 'InputFormat','yyyy-MM-dd', 'TimeZone','local');
+              catch
+                  try
+                      dt = datetime(x); % last resort – nech to odhadnout
+                  catch
+                      dt = NaT(size(x));
+                  end
+              end
+          end
+          return
+      end
+      if isnumeric(x)
+          % často bývá yyyymmdd (např. 20240131)
+          try
+              s = string(x);
+              dt = datetime(s, 'InputFormat','yyyyMMdd', 'TimeZone','local');
+          catch
+              dt = NaT(size(x));
+          end
+          return
+      end
+      % jinak
+      try
+          dt = datetime(x);
+      catch
+          dt = NaT(size(x));
+      end
+  end
+
+  function knots = sanitize_knots_local(knots)
+    knots = knots(:).';
+    knots = knots(isfinite(knots));
+    knots = sort(unique(knots,'stable'));
+    if numel(knots)<4
+        error('AgeRCS: potřebuji ≥4 unikátní uzly, mám %d.', numel(knots));
+    end
+    % přísně rostoucí (ochrana proti numerické shodě posledních dvou)
+    for i=2:numel(knots)
+        if knots(i) <= knots(i-1)
+            knots(i) = nextafter(knots(i-1), inf);
+        end
+    end
+end

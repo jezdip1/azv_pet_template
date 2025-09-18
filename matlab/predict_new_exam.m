@@ -11,7 +11,7 @@ function out = predict_new_exam(Tnew, resp, M, cal)
 %  Pred_orig, CI_orig (lo,hi), PI_orig (lo,hi),
 %  z, p_two_sided, is_outlier_95, is_outlier_99
 
-    % if ~isKey(M, resp), error('predict_new_exam: model "%s" not found.', resp); end
+    % --- model lookup ---
     safe = azvpet.util.safe_resp_name(resp);
     if isKey(M, resp)
         L = M(resp);
@@ -20,25 +20,25 @@ function out = predict_new_exam(Tnew, resp, M, cal)
     else
         error('predict_new_exam: model "%s" not found.', resp);
     end
-    % L = M(resp);
     C = cal.(resp);
 
-    % population-level (bez RE) – link-škála
+    % --- population-level predikce (bez RE) – link-škála ---
+    %head(Tnew(:, {'AgeR1','AgeR2','AgeR3','AgeR4','BMI','FilterFWHM_mm','GlobalRefPC1_z','HasPSF','HasTOF','MMI_to_MNIGMS','NCC_to_MNIGMS','Sex','Subsets','UNIS','cAge','lTime','lDose','logAcqDur_s','logVoxelVol'}))
     [yhat_link, yCI_link] = predict(L, Tnew, 'Conditional', false, 'Alpha', 0.05);
     z975 = norminv(0.975);
     SEm  = (yCI_link(:,2)-yCI_link(:,1)) / (2*z975);
     s2res = L.MSE;
-    addVar = azvpet.util.addedREvariance(L, Tnew);     % stejné jako výše
+    addVar = azvpet.util.addedREvariance(L, Tnew); % helper
     sd_pred_link = sqrt(max(0, SEm.^2 + s2res + addVar));
 
-    % kalibrace link-škály (alpha + beta*y)
+    % --- kalibrace link-škály (alpha + beta*y) ---
     yhat_cal_link = C.alpha + C.beta.*yhat_link;
 
-    % PI (link) s kalibračním faktorem c
+    % --- PI (link) s kalibračním faktorem c ---
     PI_lo_link = yhat_cal_link - z975 * (C.c * sd_pred_link);
     PI_hi_link = yhat_cal_link + z975 * (C.c * sd_pred_link);
 
-    % zpět na originální škálu
+    % --- zpět na originální škálu ---
     isLog = endsWith(resp,'_LOG') || endsWith(resp,'_SUL_LOG');
     if isLog
         smear = C.smear; if ~isfinite(smear) || smear<=0, smear=1; end
@@ -50,24 +50,32 @@ function out = predict_new_exam(Tnew, resp, M, cal)
     CI_orig   = tr(yCI_link);         % CI mean (nekalibrujeme)
     PI_orig   = [tr(PI_lo_link), tr(PI_hi_link)];
 
-    % z-score (link) – pokud máme pozorovanou hodnotu (např. pro audit)
+    % --- z-score (link) pokud máme observed hodnotu ---
     z = NaN; p = NaN; is95=false; is99=false;
+    % observed (link-škála): originál, mapovaný název, nebo safe
+    yobs_link = NaN;
     if ismember(resp, Tnew.Properties.VariableNames)
-        % yobs_link = double(Tnew.(resp));
-        yobs_link = NaN;
-        if ismember(resp, Tnew.Properties.VariableNames)
-            yobs_link = double(Tnew.(resp));
-        elseif ismember(safe, Tnew.Properties.VariableNames)
-            yobs_link = double(Tnew.(safe));
-        end
-        if isfinite(yobs_link) && isfinite(sd_pred_link) && sd_pred_link>0
-            z = (yobs_link - yhat_cal_link) ./ (C.c * sd_pred_link);
-            p = 2*(1 - normcdf(abs(z)));
-            is95 = abs(z) > 1.96;
-            is99 = abs(z) > 2.576;
+        yobs_link = double(Tnew.(resp));
+    else
+        col = azvpet.util.resolve_resp_column(resp, Tnew, struct('name_map',getfield(load('./models/_globals/trained_bundle.mat'),'nameMap'))); %#ok<GFLD>
+        if ismember(col, string(Tnew.Properties.VariableNames))
+            yobs_link = double(Tnew.(char(col)));
+        else
+            safe = azvpet.util.safe_resp_name(resp);
+            if ismember(safe, Tnew.Properties.VariableNames)
+                yobs_link = double(Tnew.(safe));
+            end
         end
     end
 
+    if isfinite(yobs_link) && isfinite(sd_pred_link) && sd_pred_link>0
+        z = (yobs_link - yhat_cal_link) ./ (C.c * sd_pred_link);
+        p = 2*(1 - normcdf(abs(z)));
+        is95 = abs(z) > 1.96;
+        is99 = abs(z) > 2.576;
+    end
+
+    % --- výstup ---
     out = struct( ...
         'Pred_link', yhat_cal_link, ...
         'CI_link', yCI_link, ...

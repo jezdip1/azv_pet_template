@@ -11,7 +11,7 @@ Thumbs.db
 # Build / artifacts
 models/*
 !models/.gitkeep
-reports/latest/*
+reports/*
 !reports/latest/.gitkeep
 
 # VSCode
@@ -19,3 +19,4 @@ reports/latest/*
 
 # data
 *.csv
+

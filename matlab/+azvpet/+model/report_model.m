@@ -308,18 +308,18 @@ function report_model(T, M, info, cv, cal, paths, opts)
         try
             y_true = double(T.(resp));
             y_fit  = fitted(mdl);  % celé predikce
-        
+
             % najdi sloupce designMatrix odpovídající Age a Sex
             coefNames = mdl.CoefficientNames;
             keepIdx = contains(coefNames,'AgeR') | strcmp(coefNames,'Sex') | contains(coefNames,'Sex:Age');
             X = mdl.designMatrix;  % n x p
-        
+
             beta = mdl.Coefficients.Estimate;
             y_age = X(:,keepIdx) * beta(keepIdx);
-        
+
             % partial residuals
             y_part = y_true - (y_fit - y_age);
-        
+
             % převed na požadovanou škálu
             if scale=="SUL"
                 y_part = exp(y_part) * cal.(resp).smear;
@@ -329,7 +329,7 @@ function report_model(T, M, info, cv, cal, paths, opts)
                     y_part = map.a + map.b * (exp(y_part)*cal.(resp).smear);
                 end
             end
-        
+
             f = figure('Visible','off','Color','w');
             hold on
             scatter(T.Age, y_part, 20, 'o', 'MarkerEdgeAlpha',0.3);
@@ -342,6 +342,164 @@ function report_model(T, M, info, cv, cal, paths, opts)
         catch ME
             warning('Partial residual plot failed for %s: %s', resp, ME.message);
         end
+% --- už máš: scatter(...) s partial residuals ---
+
+        % ===== Overlay: fitted effect of Age (mean curve) =====
+        try
+            L = M(resp);              % LinearMixedModel pro daný region
+            V = L.Variables;
+            fn = string(V.Properties.VariableNames);
+        
+            % 1) referenční řádek (median numerik, modus kategoriál)
+            ref = local_ref_row_like(L, V, resp);
+        
+            % 2) věková mřížka z tréninkových dat
+            ageTrain = double(V.Age); ageTrain = ageTrain(isfinite(ageTrain));
+            if numel(ageTrain) < 5, error('Too few Age values'); end
+            aLo = prctile(ageTrain,5); aHi = prctile(ageTrain,95);
+            ageGrid = linspace(aLo, aHi, 100)';
+        
+            % 3) připrav tabulku pro predikci (kopie ref pro každý bod mřížky)
+            newT = repmat(ref, numel(ageGrid), 1);
+            if ~ismember('Age', newT.Properties.VariableNames)
+                newT.Age = nan(height(newT),1);
+            end
+            newT.Age = ageGrid;
+        
+            % 4) doplň AgeR* nebo cAge(,2,3) podle toho, co má model
+            feNames = string(L.Coefficients.Name);
+            useSpl = any(startsWith(feNames,"AgeR"));
+            if useSpl
+                % použij existující počet AgeR sloupců v modelu
+                ageRcols = feNames(startsWith(feNames,"AgeR"));
+                K = numel(ageRcols) + 1;
+                % uzly: vem je z tabulky, pokud jsou uložené; jinak kvantily
+                try
+                    % volitelně – pokud někde ukládáš fixní uzly na disk, načti je
+                    load('./models/_globals/age_knots.mat', 'knots'); %#ok<LOAD>
+                    if ~exist('knots','var') || numel(knots)~=K
+                        error('no fixed knots');
+                    end
+                catch
+                    knots = prctile(ageTrain, linspace(5,95,K));
+                end
+                knots = unique(knots(:).'); kK=knots(end); kKm=knots(end-1);
+                d = @(u,c) ((u-c).*(u>c)).^3;
+        
+                Z = zeros(numel(ageGrid), K-2);
+                for j=1:K-2
+                    kj = knots(j);
+                    Z(:,j) = d(ageGrid,kj) - d(ageGrid,kK)*(kK-kj)/(kK-kKm) + d(ageGrid,kKm)*(kKm-kj)/(kK-kKm);
+                end
+                % zapiš AgeR1..AgeR(K-1) do newT (AgeR1 = lineární věk)
+                for j=1:(K-1)
+                    nm = sprintf('AgeR%d', j);
+                    if ~ismember(nm, newT.Properties.VariableNames)
+                        newT.(nm) = nan(height(newT),1);
+                    end
+                    if j==1, newT.(nm) = ageGrid; else, newT.(nm) = Z(:,j-1); end
+                end
+            else
+                % polynomy: stejné centrování jako ve fitu (≈ průměr Age v train)
+                muAge = mean(ageTrain,'omitnan');
+                if ismember('cAge', newT.Properties.VariableNames),  newT.cAge  = ageGrid - muAge; end
+                if ismember('cAge2', newT.Properties.VariableNames), newT.cAge2 = (ageGrid - muAge).^2; end
+                if ismember('cAge3', newT.Properties.VariableNames), newT.cAge3 = (ageGrid - muAge).^3; end
+            end
+        
+            % 5) predikce na LINK-škále bez RE
+            [yp_link, yCI_link] = predict(L, newT, 'Conditional', false, 'Alpha', 0.05);
+        
+            % 6) převod do požadované prezentované škály
+            yscale = "SUL"; if exist('opts','var') && isfield(opts,'y_scale'), yscale = string(opts.y_scale); end
+            tr_fun = @(x) x;    % LINK default
+            if endsWith(resp,'_SUL_LOG') || endsWith(resp,'_LOG')
+                smear = NaN;
+                if exist('cal','var') && isstruct(cal) && isfield(cal, resp) && isfield(cal.(resp),'smear')
+                    smear = cal.(resp).smear;
+                end
+                if ~isfinite(smear) || smear<=0, smear = 1; end
+                switch upper(yscale)
+                    case "LINK"
+                        tr_fun = @(x) x; % nic
+                    case "SUL"
+                        tr_fun = @(x) exp(x).*smear;
+                    case "RAW"
+                        % pokud máš uložený převod SUL->RAW (např. scale per series),
+                        % sem ho doplň; jinak aspoň SUL:
+                        tr_fun = @(x) exp(x).*smear; % fallback SUL
+                    otherwise
+                        tr_fun = @(x) exp(x).*smear;
+                end
+            else
+                % nelog – LINK==ORIG
+                tr_fun = @(x) x;
+            end
+        
+            Ymean = tr_fun(yp_link);
+            Ylo   = tr_fun(yCI_link(:,1));
+            Yhi   = tr_fun(yCI_link(:,2));
+        
+            % 7) vykresli hladkou křivku a (volitelně) CI pás
+            f = figure('Visible','off','Color','w');
+
+            hold on
+            fill([ageGrid; flipud(ageGrid)], [Ylo; flipud(Yhi)], [0 0 0], ...
+                 'FaceAlpha', 0.06, 'EdgeColor','none');    % lehký CI pás
+            plot(ageGrid, Ymean, 'r-', 'LineWidth', 2);     % mean curve (červená)
+
+            % === Y-label (správný postfix + sanitizace) ===========================
+            % z resp vyrobíme „base name“ a postfix podle škály
+            yscale = "SUL"; 
+            if exist('opts','var') && isfield(opts,'y_scale'), yscale = string(opts.y_scale); end
+            
+            respDisp = char(resp);
+            % pokud je to SUL_LOG, usekni suffix do popisku
+            if endsWith(respDisp,'_SUL_LOG')
+                baseDisp = extractBefore(respDisp, '_SUL_LOG');
+            elseif endsWith(respDisp,'_LOG')
+                baseDisp = extractBefore(respDisp, '_LOG');
+            else
+                baseDisp = respDisp;
+            end
+            
+            switch upper(yscale)
+                case "LINK"
+                    postfix = " (link)";
+                case "SUL"
+                    postfix = " (SUL)";
+                case "RAW"
+                    postfix = " (raw units)";
+                otherwise
+                    postfix = "";
+            end
+            
+            ylab = sprintf('%s%s', baseDisp, postfix);
+            
+            % sanitizace popisku (aby _ a ^ nedělaly indexy)
+            doSan = true;
+            if exist('opts','var') && isfield(opts,'sanitize'), doSan = logical(opts.sanitize); end
+            if doSan
+                ylabel(ylab, 'Interpreter','none');
+            else
+                ylabel(ylab);
+            end
+
+
+            % legenda (není-li už přecpaná)
+            % legend({'partial residuals','Age effect (mean)','CI mean'}, 'Location','best');
+
+            set_title(gca, sprintf('%s — Partial residuals (Age)', nice_label(resp)), opts.sanitize);
+            saveas(f, fullfile(out,[resp '_partial_resid_fitted.png']));
+            close(f);
+
+
+        catch ME
+            warning('Partial residual fitted overlay failed (%s): %s', resp, ME.message);
+        end
+        
+        % --- konec overlayu ---
+        
         % === Predicted vs Observed (LOO) ===
         try
             cvt = cv.(resp);
@@ -616,5 +774,47 @@ function map = raw_from_sul_mapping(Tin, resp)
             end
         catch
         end
+    end
+end
+
+function ref = local_ref_row_like(L, Tref, DVname)
+% 1× referenční řádek: numerické=median, kategoriální=modus; respektuje typy.
+
+    vn = string(L.Variables.Properties.VariableNames);
+    ref = Tref(1,:); % 1 řádek, typově shodný
+
+    for v = vn
+        nm = char(v);
+        if strcmp(nm, DVname), continue; end
+        if ~ismember(nm, Tref.Properties.VariableNames), continue; end
+
+        col = Tref.(nm);
+
+        if isnumeric(col) || islogical(col)
+            ref.(nm)(1) = median(double(col),'omitnan');
+        elseif isduration(col)
+            ref.(nm)(1) = seconds(median(seconds(col),'omitnan'));
+        elseif isdatetime(col)
+            ii = find(~ismissing(col),1,'first');
+            if ~isempty(ii), ref.(nm)(1) = col(ii); end
+        elseif iscategorical(col)
+            cc = removecats(col);
+            if isempty(categories(cc))
+                ref.(nm)(1) = categorical(missing, categories(col));
+            else
+                ref.(nm)(1) = mode(cc);
+            end
+        else
+            ii = find(~ismissing(col),1,'first');
+            if ~isempty(ii), ref.(nm)(1) = col(ii); end
+        end
+    end
+
+    % dopočítej cAge, cAge2, cAge3, pokud jsou ve vstupu
+    if ismember('Age', ref.Properties.VariableNames) && ismember('Age', Tref.Properties.VariableNames)
+        muAge = mean(double(Tref.Age), 'omitnan');
+        if ismember('cAge',  ref.Properties.VariableNames), ref.cAge(1)  = ref.Age(1) - muAge; end
+        if ismember('cAge2', ref.Properties.VariableNames), ref.cAge2(1) = ref.cAge(1).^2;     end
+        if ismember('cAge3', ref.Properties.VariableNames), ref.cAge3(1) = ref.cAge(1).^3;     end
     end
 end

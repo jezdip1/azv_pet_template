@@ -14,22 +14,27 @@ covOpts = struct( ...
     'doseVar',        'InjectedDose_MBq', ...   % máme z ensure_metadata_vars
     'doseMultiplier', 1 ...
 );
+%%
+load('/home/jezdip1/ISARGUBU/media/shared_storage/motol/AZV_PET/tools/azv_pet_template/matlab/test_PET_08092025.mat')
+
 [T0, metaCov] = azvpet.features.ensure_model_covariates(T0, covOpts);
-muAge = metaCov.muAge;
-% save('./models/_globals/trained_bundle.mat', 'M','info','cv','cal','nameMap','muAge','-v7.3');
+[Tnew, metaCov_new] = azvpet.features.ensure_model_covariates(Tnew, covOpts);
 
 % 1) seznam regionů podle configu
 baseNames = azvpet.features.list_region_bases(T0, 'Prefix', string(cfg.region_prefix));
+baseNames_new = azvpet.features.list_region_bases(Tnew, 'Prefix', string(cfg.region_prefix));
 
 % 2) zajisti *_SUL_LOG pro všechny regiony (NaN-tolerantně)
 doseOpts = struct('doseVar','InjectedDose_MBq','multiplier',1,'lbmVersion','James');
 [T0, ~] = azvpet.features.ensureSUL_LOG(T0, baseNames, doseOpts);
+[Tnew, ~] = azvpet.features.ensureSUL_LOG(Tnew, baseNames_new, doseOpts);
 
 % 3) pokud global_ref.metric_suffix je '_SUL_LOG', zajisti totéž i pro refy:
 if isfield(cfg,'global_ref') && isfield(cfg.global_ref,'metric_suffix') ...
    && strcmpi(cfg.global_ref.metric_suffix,'_SUL_LOG')
     for r = string(cfg.global_ref.refs).'
         [T0, ~] = azvpet.features.ensureSUL_LOG(T0, char(r), doseOpts);
+        [Tnew, ~] = azvpet.features.ensureSUL_LOG(Tnew, char(r), doseOpts);
     end
 end
 
@@ -37,43 +42,20 @@ end
 % (pokud ji máš – já v ensure_model_covariates už volám ensure_GlobalRefPC1_z s './models/_globals')
 
 [form, opts] = azvpet.model.define_formula(cfg, T0);
+[form_new, opts_new] = azvpet.model.define_formula(cfg, Tnew);
+
+
+
+
 
 [Tc, nameMap, optsC] = azvpet.util.ensure_valid_varnames(T0, opts);
-optsC.name_map = nameMap;             % <<< DŮLEŽITÉ
+[Tnew, nameMap_new, optsC_new] = azvpet.util.ensure_valid_varnames(Tnew, opts_new);
 
-pdir = './models/_globals';
-azvpet.io.save_global_ref_pca(T0, string(cfg.global_ref.refs), pdir);
+%%
 
-% [M, info]    = azvpet.model.train_lmem(Tc, form, opts);
-[M, info] = azvpet.model.train_lmem(Tc, form, optsC);
+one = Tnew(1, :);
 
-% cv = azvpet.model.loo_cv(Tc, form, opts); %% pozor delal jsme jeste
-% zasahy do te paralelni verze, takze bude potreba overit ta neparalelni
+outdir = fullfile('reports','new_exam_SOME_ID');
+S = report_new_patient_all_regions(Tc, one, info, M, cal, outdir);
 
-% cv = azvpet.model.loo_cv_par(Tc, form, optsC);
-% 
-% cal = azvpet.model.calibrate_from_cv(M, cv);
-% cal = azvpet.model.calibrate_model(Tc, M, info, cv);
-cv = azvpet.model.loo_cv_par(Tc, form, optsC);
-
-% 3) kalibrace z LOO
-cal = azvpet.model.calibrate_from_cv_full(M, cv);
-
-% save('./models/_globals/trained_bundle.mat', 'M','info','cv','cal','nameMap','-v7.3');
-save('./models/_globals/trained_bundle.mat', 'M','info','cv','cal','nameMap','muAge','metaCov','-v7.3');
-
-% % prezentace v SUL (orig) – default
-% azvpet.model.report_model(Tc, M, info, cv, cal, paths);
-
-% prezentace v původních RAW intenzitách
-opts = struct('y_scale',"SUL",'sanitize',true);
-azvpet.model.report_model(Tc, M, info, cv, cal, paths, opts);
-
-% % diagnosticky čistě na link-škále
-% opts = struct('y_scale',"LINK",'sanitize',true);
-% azvpet.model.report_model(Tc, M, info, cv, cal, paths, opts);
-
-
-
-% azvpet.model.report_model(Tc, M, info, cv, cal, paths);
-% azvpet.io.save_artifacts(M, info, cal, paths, featCfg, mdlCfg);
+disp(S.summary_table(1:10, {'Region','Observed','Pred','PI_lo','PI_hi','z','isOut95','isOut99'}))
