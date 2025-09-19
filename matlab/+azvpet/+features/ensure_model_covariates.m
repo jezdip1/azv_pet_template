@@ -231,34 +231,72 @@ function [T, meta] = ensure_model_covariates(T, opts)
   
 
 %% 9) GlobalRefPC1_z
+% try
+%     % 9a) Nejdřív zajisti *_SUL_LOG pro referenční regiony
+%     refs = string(opts.refs(:));
+%     refs = refs(refs~="");
+%     if ~isempty(refs)
+%         doseOpts = struct('doseVar',opts.doseVar, ...
+%                           'multiplier',opts.doseMultiplier, ...
+%                           'lbmVersion',opts.lbmVersion);
+%         for r = refs.'
+%             % r je base name (např. "Mean_Cerebellum_Gray_Matter_Right")
+%             % ensureSUL_LOG vytvoří r+"_SUL_LOG", pokud zdrojové sloupce existují
+%             [T, ~] = azvpet.features.ensureSUL_LOG(T, char(r), doseOpts);
+%         end
+%     end
+% 
+%     % 9b) Spočítej GlobalRefPC1_z pomocí uloženého projektoru (bez refitování)
+%     if ~ismember('GlobalRefPC1_z', string(T.Properties.VariableNames))
+%         pdir = './models/_globals';
+%         % sjednoť název volby: preferuj opts.params_dir, ale toleruj i opts.paramsDir
+%         if isfield(opts,'params_dir') && ~isempty(opts.params_dir)
+%             pdir = opts.params_dir;
+%         elseif isfield(opts,'paramsDir') && ~isempty(opts.paramsDir)
+%             pdir = opts.paramsDir;
+%         end
+%         [T, ~] = azvpet.features.ensure_GlobalRefPC1_z(T, pdir);
+%     end
+% catch ME
+%     % fallback – nic nerefituj, raději nech NaN (a dej vědět)
+%     warning('ensure_model_covariates: GlobalRefPC1_z fallback (%s)', ME.message);
+%     if ~ismember('GlobalRefPC1_z', string(T.Properties.VariableNames))
+%         T.GlobalRefPC1_z = nan(height(T),1);
+%     end
+% end
+%% 9) GlobalRefPC1_z
+refs = string(opts.refs(:));
+refs = refs(refs~="");
+
 try
-    % 9a) Nejdřív zajisti *_SUL_LOG pro referenční regiony
-    refs = string(opts.refs(:));
-    refs = refs(refs~="");
+    % --- vždy nejdřív zajisti *_SUL_LOG pro referenční regiony
     if ~isempty(refs)
         doseOpts = struct('doseVar',opts.doseVar, ...
                           'multiplier',opts.doseMultiplier, ...
                           'lbmVersion',opts.lbmVersion);
         for r = refs.'
-            % r je base name (např. "Mean_Cerebellum_Gray_Matter_Right")
-            % ensureSUL_LOG vytvoří r+"_SUL_LOG", pokud zdrojové sloupce existují
             [T, ~] = azvpet.features.ensureSUL_LOG(T, char(r), doseOpts);
         end
     end
 
-    % 9b) Spočítej GlobalRefPC1_z pomocí uloženého projektoru (bez refitování)
+    % --- kam ukládat / odkud číst projektor
+    pdir = './models/_globals';
+    if isfield(opts,'params_dir') && ~isempty(opts.params_dir)
+        pdir = opts.params_dir;
+    elseif isfield(opts,'paramsDir') && ~isempty(opts.paramsDir)
+        pdir = opts.paramsDir;
+    end
+
     if ~ismember('GlobalRefPC1_z', string(T.Properties.VariableNames))
-        pdir = './models/_globals';
-        % sjednoť název volby: preferuj opts.params_dir, ale toleruj i opts.paramsDir
-        if isfield(opts,'params_dir') && ~isempty(opts.params_dir)
-            pdir = opts.params_dir;
-        elseif isfield(opts,'paramsDir') && ~isempty(opts.paramsDir)
-            pdir = opts.paramsDir;
+        if isfield(opts,'mode') && strcmpi(opts.mode,'train')
+            % >>> první běh: spočítej PCA a ulož projektor
+            [T, ~] = azvpet.features.ensure_GlobalRefPC1_z(T, pdir, 'fit', refs);
+        else
+            % >>> predikce: použij uložený projektor
+            [T, ~] = azvpet.features.ensure_GlobalRefPC1_z(T, pdir, 'predict', refs);
         end
-        [T, ~] = azvpet.features.ensure_GlobalRefPC1_z(T, pdir);
     end
 catch ME
-    % fallback – nic nerefituj, raději nech NaN (a dej vědět)
     warning('ensure_model_covariates: GlobalRefPC1_z fallback (%s)', ME.message);
     if ~ismember('GlobalRefPC1_z', string(T.Properties.VariableNames))
         T.GlobalRefPC1_z = nan(height(T),1);
