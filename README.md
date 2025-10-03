@@ -263,6 +263,102 @@ For comparison, some **challenging regions**:
 ├── docs/img/
 └── CerebrA_LabelDetails.csv
 ```
+---
+# Classifying a new patient
+
+Once the models are trained, **new PET scans** can be classified against the normative reference.
+
+## Step 1: Prepare the input
+- The input table for a new patient must be in the **same format** as the training data  
+  (`test_pet_regions_with_mmi_JOINED_*.csv`), including:
+  - Region means/medians (after thresholding, parcellation, SUL and log-transform).
+  - DICOM metadata (age, sex, BMI, dose, time, scanner settings…).
+- **Important:** the **PCA projection** (`GlobalRefPC1_z`) must use the **same loadings** saved during training.  
+  Do **not** recompute PCA for new data.
+
+## Step 2: Set covariates
+- Continuous covariates (Age, BMI, Dose, Time, Voxel volume, Acquisition duration) are **centered** by the same means as in training.
+- Categorical covariates (Sex, HasTOF, HasPSF, scanner site “UNIS”) are matched to the same reference coding.
+- If a new patient has a covariate value outside the training range (e.g., higher BMI), the model still extrapolates, but the uncertainty grows.
+
+## Step 3: Predict region-wise values
+For each region, the model outputs:
+- **Predicted mean** and **confidence interval (CI)**  
+- **Prediction interval (PI)** for an individual case  
+- **z-score** and two-sided **p-value**  
+- Outlier flags (`is_outlier_95`, `is_outlier_99`)
+
+Example JSON result (for *Superior Parietal Left*):
+```json
+{
+  "Pred_orig": 0.0060,
+  "CI_orig": [0.0057, 0.0064],
+  "PI_orig": [0.0047, 0.0077],
+  "z": -0.77,
+  "p": 0.443,
+  "is_outlier_95": false,
+  "is_outlier_99": false
+}
+```
+
+## Step 4: Visualize region vs. model
+Two complementary views are provided:
+
+- **Boxplot (matched controls)**  
+  ![Box matched](docs/img/Median_Superior_Parietal_Left_SUL_LOG_box_matched.png)  
+  Patient value (red) vs. matched controls (age/sex subset).
+
+- **Boxplot (model CI/PI)**  
+  ![Box model](docs/img/Median_Superior_Parietal_Left_SUL_LOG_box_model.png)  
+  Patient value (red) vs. model prediction (blue line = mean, light blue band = CI, whiskers = PI).
+
+## Step 5: Summary across regions
+The whole brain can be reviewed at once:
+
+- **Waterfall plot of z-scores**  
+  ![Waterfall](docs/img/new_exam_z_waterfall.png)  
+  Regions are ordered by deviation. Dashed lines at ±2 mark the “alert” zone; ±3 are rare/extreme.
+
+- **Tabular summary**  
+  Example rows from `new_exam_summary.json`:
+
+  | Region               | Observed | Pred   | z    | p     | Outlier   |
+  |----------------------|----------|--------|------|-------|-----------|
+  | Parahippocampal R    | 0.00326  | 0.00439| -2.89| 0.0039| **yes (99%)** |
+  | Superior Temporal R  | 0.00382  | 0.00503| -2.78| 0.0055| **yes (99%)** |
+  | Middle Temporal R    | 0.00398  | 0.00539| -2.23| 0.026 | yes (95%) |
+
+---
+
+## Workflow overview
+
+```
+DICOM → Preprocessing (registration, parcellation, thresholding) 
+     → Regional table (means/medians + metadata) 
+     → Apply stored PCA projection (GlobalRefPC1_z) 
+     → Match & center covariates 
+     → Predict with trained models 
+     → JSON/CSV results + diagnostic figures 
+     → Report (per-region + whole-brain summary)
+```
+
+---
+
+## Interpretation
+- Regions with |z| < 2 fall within expected variation.  
+- **z between 2–3** → possible deviation (highlighted at 95% level).  
+- **z > 3** → highly atypical (rare under null, flagged at 99%).  
+- The summary shows **clusters of deviations** (e.g., bilateral temporal/parahippocampal), which may support clinical hypotheses.
+
+---
+
+**Take-home message:**  
+Classification of a new patient uses the **same pipeline** as training, with:
+- Consistent preprocessing (SUL, log, atlas parcellation, thresholds).  
+- Fixed PCA projection from training.  
+- Covariates set and centered identically.  
+- Outputs in JSON/CSV, with **per-region z-scores** and a **global waterfall plot** for rapid review.
+
 
 ---
 
