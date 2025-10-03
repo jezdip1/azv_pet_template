@@ -176,7 +176,54 @@ Clinical PET data are messy: different ages, sexes, scanners, protocols… We no
 
 ## How well do regions model?
 
-Most regions reach **R² ~0.96–0.99**; brainstem/cerebellum often exceed **0.99**, while ventricles/basal forebrain are typically lower (~0.94–0.95). For example (from `summary.json`).
+Most cortical and subcortical **gray matter regions** show excellent model fit with  
+**R² between ~0.97–0.99**, which means the covariates (age spline, sex, dose/time, scanner) explain nearly all variance.
+
+A few examples (from `summary.json`):
+
+- **Amygdala**  
+  - Left: R²m = 0.981  
+  - Right: R²m = 0.982  
+  → Subcortical gray matter structures are captured very well.
+
+- **Caudal Middle Frontal**  
+  - Left: R²m = 0.967  
+  - Right: R²m = 0.968  
+  → Frontal cortical parcels also maintain high explanatory power, slightly lower than limbic regions.
+
+- **Inferior Parietal**  
+  - Left: R²m = 0.975  
+  - Right: R²m = 0.976  
+  → Posterior association cortex is robustly modelled.
+
+- **Hippocampus**  
+  - Left: R²m = 0.983  
+  - Right: R²m = 0.993  
+  → Hippocampal metabolism aligns tightly with the covariate model, especially on the right.
+
+For comparison, some **challenging regions**:
+
+- **Basal forebrain**  
+  - Left: R²m = 0.935  
+  - Right: R²m = 0.933  
+  → Small, hard-to-segment structures are less stable; signal is more affected by partial volume.
+
+- **Optic chiasm**  
+  - Left: R²m = 0.952  
+  - Right: R²m = 0.941  
+  → Very small regions near CSF/air boundaries are harder to model.
+
+- **Pars orbitalis (frontal opercular)**  
+  - Left: R²m = 0.966  
+  - Right: R²m = 0.941  
+  → Right side shows notably lower fit, possibly due to variable coverage or registration issues.
+
+---
+
+**Take-home message:**  
+- **Large cortical and limbic gray matter** parcels achieve near-ceiling R².  
+- **Small deep nuclei or edge regions** (basal forebrain, optic chiasm) are harder to fit and may show noisier predictions.  
+- Ventricle regions, while reaching R² ~0.94–0.96, mainly reflect **residual background uptake** rather than true neuronal signal, so they are less meaningful for interpretation.
 
 ---
 
