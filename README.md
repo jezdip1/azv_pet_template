@@ -70,23 +70,107 @@ Clinical PET data are messy: different ages, sexes, scanners, protocols… We no
 
 ## What the figures look like
 
-> The examples below are for **Median-Hippocampus-Left-SUL_LOG** (place the PNGs under `docs/img/` to render in GitHub).
+> The examples below are for **Median-Hippocampus-Left-SUL_LOG**.  
+> To render the images on GitHub, put the PNGs under `docs/img/` and keep the filenames as below.
 
-- **Age effect with CI & PI**  
-  ![Age effect](docs/img/Median_Hippocampus_Left_SUL_LOG_age_effect.png)
+### 1) Age effect with CI & PI
+![Age effect](docs/img/Median_Hippocampus_Left_SUL_LOG_age_effect.png)
 
-- **Calibration (10 bins)**  
-  ![Calibration](docs/img/Median_Hippocampus_Left_SUL_LOG_calibration.png)
+**What you see**
+- **X-axis:** Age [years]. **Y-axis:** regional **median SUL_LOG** (back-transformed to SUL in the axis label if configured).
+- Two solid curves = **sex-specific mean predictions** (`Sex = M` in blue, `Sex = F` in orange).  
+  All other covariates are held at their **reference** values (centered means/medians; random effect set to 0).
+- **Shaded bands:**  
+  - **CI (narrow band):** uncertainty of the **mean** prediction.  
+  - **PI (wide band):** expected **range for individual patients** (includes residual variability).
 
-- **Partial residuals (age term)**  
-  ![Partial residuals](docs/img/Median_Hippocampus_Left_SUL_LOG_partial_resid.png)  
-  ![Spline fit on partials](docs/img/Median_Hippocampus_Left_SUL_LOG_partial_resid_fitted.png)
+**How to read it**
+- Use the **mean curves** to understand the expected age/sex trajectory of the region under “typical” scan settings.
+- Use the **PI** for clinical interpretation: a new patient lying **outside the PI** at their age/sex suggests the region is atypical (|z| ≳ 2).  
+- The **gap between PI and CI** visualizes how much **inter-individual variability** remains after covariate adjustment.
 
-- **Predicted vs Observed (LOO)**  
-  ![Pred vs Obs](docs/img/Median_Hippocampus_Left_SUL_LOG_pred_vs_obs.png)
+**Takeaways**
+- The model captures **non-linear age effects** (through spline terms) and **sex differences**.  
+- A **flat CI** but **wide PI** means the mean trend is certain, yet individuals vary—use z-scores/PI for decisions.
 
-- **Standardized residuals vs age**  
-  ![Z vs Age](docs/img/Median_Hippocampus_Left_SUL_LOG_zscore_vs_age.png)
+---
+
+### 2) Calibration (10 bins)
+![Calibration](docs/img/Median_Hippocampus_Left_SUL_LOG_calibration.png)
+
+**What you see**
+- We sort cases by predicted value, split into **10 equal-frequency bins**, and plot **Observed mean** (y) vs **Predicted mean** (x).  
+- Dashed line = **perfect calibration** (`y = x`). Blue circles = each bin; blue line = smoothed trend.
+
+**How to read it**
+- Points **on** the dashed line → calibrated predictions.  
+- **Below** the line → **overprediction** (model predicts higher than observed).  
+- **Above** the line → **underprediction**.
+
+**Why it matters**
+- Good calibration is crucial for **prediction intervals** and **z-scores** to be trustworthy.  
+- If we detect a consistent slope/intercept bias, we apply a **monotone post‑hoc calibration** (e.g., isotonic/linear) used later when scoring new patients.
+
+---
+
+### 3) Partial residuals (age term)
+![Partial residuals](docs/img/Median_Hippocampus_Left_SUL_LOG_partial_resid.png)  
+![Spline fit on partials](docs/img/Median_Hippocampus_Left_SUL_LOG_partial_resid_fitted.png)
+
+**What you see**
+- Each dot is the **partial residual** of the region w.r.t. **age**, i.e., data with all other covariates (dose/time, scanner, BMI, etc.) **removed**.  
+- The red curve (second panel) is a **smooth fit with 95% band** to visualize **shape** independent of other effects.
+
+**How to read it**
+- Check that the **smooth** resembles a sensible, **smoothly varying** function (the spline’s intended shape).  
+- Systematic patterns (e.g., sharp bends, waves) may suggest **under/over‑fitting**, missing interactions, or a need to **relocate knots**.
+
+**Takeaways**
+- Partial residuals validate that the **age spline** is adequate and not hiding obvious misfit.  
+- They also reveal whether residual variance **changes with age** (heteroskedasticity).
+
+---
+
+### 4) Predicted vs Observed (LOO)
+![Pred vs Obs](docs/img/Median_Hippocampus_Left_SUL_LOG_pred_vs_obs.png)
+
+**What you see**
+- **Leave‑One‑Out (LOO)** predictions (y‑axis) against **observed** values (x‑axis); dashed line is `y = x`.  
+- The title shows **R²**, **MAE**, **RMSE** from LOO—not from in‑sample fit.
+
+**How to read it**
+- Tight cloud around the diagonal → strong **out‑of‑sample accuracy**.  
+- **Systematic tilt** (slope ≠ 1) or **offset** (intercept ≠ 0) → miscalibration; address with the calibration step.  
+- Fanning patterns → heteroskedasticity; PI must reflect this (ours uses LOO residuals).
+
+**Takeaways**
+- This is the **most honest single‑plot sanity check** of generalization.  
+- Always trust LOO metrics over in‑sample R² when judging model utility.
+
+---
+
+### 5) Standardized residuals vs age
+![Z vs Age](docs/img/Median_Hippocampus_Left_SUL_LOG_zscore_vs_age.png)
+
+**What you see**
+- **z = (Obs − Pred) / (c · sd_pred)** on the y‑axis (where `c` is a small calibration factor from LOO).  
+- Dashed lines at **±2** and solid at **±3** z‑scores mark common **alert thresholds**.
+
+**How to read it**
+- Points should be **centered around 0** with **no age trend**.  
+- **Clusters beyond ±2** imply heavier tails or unmodelled structure; review covariates and QC metrics.
+
+**Practical use**
+- When scoring new patients, the same z‑score definition is used. Values beyond **±2** are flagged; **±3** are rare/extreme.
+
+---
+
+**Summary of the section – what to remember**
+- **Age curves (CI/PI)** tell you *what is typical* vs *what range you should expect for an individual*.
+- **Calibration** guarantees that predicted numbers correspond to reality; we correct if needed.
+- **Partial residuals** confirm that the **functional form** (spline) is appropriate.
+- **Pred vs Obs (LOO)** is your generalization check; prefer it to in‑sample metrics.
+- **z vs Age** is an operational QC for **outliers** and **age‑dependent bias** in residuals.
 
 ---
 
